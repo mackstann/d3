@@ -6627,39 +6627,76 @@ d3.layout.treemap = function() {
     }
   }
 
-  // Recursively arranges the specified node's children into squarified rows.
-  function squarify(node) {
+  function binarytree_children(children, sum, x, y, dx, dy) {
+    if (children.length == 1)
+    {
+      children[0].x = x;
+      children[0].y = y;
+      children[0].dx = dx;
+      children[0].dy = dy;
+      return;
+    }
+
+    var midpoint = sum/2,
+        pivot_index = 1,
+        running_sum = children[0].area;
+    for (var i = 1; i < children.length; i++)
+    {
+      if(running_sum >= midpoint)
+      {
+        pivot_index = i;
+        break;
+      }
+      running_sum += children[i].area;
+    }
+
+    var half1 = children.slice(0, pivot_index),
+        half2 = children.slice(pivot_index, children.length),
+        half1_sum = running_sum,
+        half2_sum = sum - running_sum,
+        pivot_pct = running_sum / sum;
+
+    if (dy > dx)
+    {
+      var y_pivot = Math.round(pivot_pct * dy);
+      binarytree_children(half1, half1_sum, x, y, dx, y_pivot);
+      binarytree_children(half2, half2_sum, x, y + y_pivot, dx, dy - y_pivot);
+    }
+    else
+    {
+      var x_pivot = Math.round(pivot_pct * dx);
+      binarytree_children(half1, half1_sum, x, y, x_pivot, dy);
+      binarytree_children(half2, half2_sum, x + x_pivot, y, dx - x_pivot, dy);
+    }
+  }
+
+  function binarytree(node) {
     var children = node.children;
+
     if (children && children.length) {
-      var rect = pad(node),
-          row = [],
-          remaining = children.slice(), // copy-on-write
-          child,
-          best = Infinity, // the best row score so far
-          score, // the current row score
-          u = Math.min(rect.dx, rect.dy), // initial orientation
-          n;
-      scale(remaining, rect.dx * rect.dy / node.value);
-      row.area = 0;
-      while ((n = remaining.length) > 0) {
-        row.push(child = remaining[n - 1]);
-        row.area += child.area;
-        if ((score = worst(row, u)) <= best) { // continue with this orientation
-          remaining.pop();
-          best = score;
-        } else { // abort, and try a different orientation
-          row.area -= row.pop().area;
-          position(row, u, rect, false);
-          u = Math.min(rect.dx, rect.dy);
-          row.length = row.area = 0;
-          best = Infinity;
-        }
+      // recursively calculate sum values for all parent nodes that contain
+      // children. we only need/want to do this once, so we check if we're at
+      // the root node.
+      if (!node.parent) {
+        var sum_children = function(n) {
+          if(n.children && n.children.length)
+            n.value = d3.sum(n.children, sum_children);
+          return n.value;
+        };
+        node.value = d3.sum(children, sum_children);
       }
-      if (row.length) {
-        position(row, u, rect, true);
-        row.length = row.area = 0;
-      }
-      children.forEach(squarify);
+
+      var rect = pad(node);
+      node.area = rect.dx * rect.dy;
+
+      // calculates children's areas
+      scale(children, node.area / node.value);
+
+      // subdivide our area proportionally between our direct children
+      binarytree_children(children, node.area, rect.x, rect.y, rect.dx, rect.dy);
+
+      // and recurse.
+      children.forEach(binarytree);
     }
   }
 
@@ -6686,62 +6723,6 @@ d3.layout.treemap = function() {
     }
   }
 
-  // Computes the score for the specified row, as the worst aspect ratio.
-  function worst(row, u) {
-    var s = row.area,
-        r,
-        rmax = 0,
-        rmin = Infinity,
-        i = -1,
-        n = row.length;
-    while (++i < n) {
-      if (!(r = row[i].area)) continue;
-      if (r < rmin) rmin = r;
-      if (r > rmax) rmax = r;
-    }
-    s *= s;
-    u *= u;
-    return s
-        ? Math.max((u * rmax * ratio) / s, s / (u * rmin * ratio))
-        : Infinity;
-  }
-
-  // Positions the specified row of nodes. Modifies `rect`.
-  function position(row, u, rect, flush) {
-    var i = -1,
-        n = row.length,
-        x = rect.x,
-        y = rect.y,
-        v = u ? round(row.area / u) : 0,
-        o;
-    if (u == rect.dx) { // horizontal subdivision
-      if (flush || v > rect.dy) v = rect.dy; // over+underflow
-      while (++i < n) {
-        o = row[i];
-        o.x = x;
-        o.y = y;
-        o.dy = v;
-        x += o.dx = Math.min(rect.x + rect.dx - x, v ? round(o.area / v) : 0);
-      }
-      o.z = true;
-      o.dx += rect.x + rect.dx - x; // rounding error
-      rect.y += v;
-      rect.dy -= v;
-    } else { // vertical subdivision
-      if (flush || v > rect.dx) v = rect.dx; // over+underflow
-      while (++i < n) {
-        o = row[i];
-        o.x = x;
-        o.y = y;
-        o.dx = v;
-        y += o.dy = Math.min(rect.y + rect.dy - y, v ? round(o.area / v) : 0);
-      }
-      o.z = false;
-      o.dy += rect.y + rect.dy - y; // rounding error
-      rect.x += v;
-      rect.dx -= v;
-    }
-  }
 
   function treemap(d) {
     var nodes = stickies || hierarchy(d),
@@ -6752,7 +6733,7 @@ d3.layout.treemap = function() {
     root.dy = size[1];
     if (stickies) hierarchy.revalue(root);
     scale([root], root.dx * root.dy / root.value);
-    (stickies ? stickify : squarify)(root);
+    (stickies ? stickify : binarytree)(root);
     if (sticky) stickies = nodes;
     return nodes;
   }
